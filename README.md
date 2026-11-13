@@ -112,6 +112,66 @@ legislators / last run 2026-11-13 11:56 UTC (status ok), the Education
 category filter returned its 9 bills, and the original database file's
 checksum was identical before and after (the app opens it read-only).
 
+## Act Box (v1)
+
+`legitrack/actbox.py` — a self-contained FastAPI router (`/act`,
+`/act/lookup`, `/act/compose`) implementing SPEC section 7's action
+feature. It reuses the web app's design tokens and mirrors its
+SQLite/Postgres read paths. **Wiring is the one remaining step:** add
+`app.include_router(actbox.create_actbox_router(db_path))` in
+`web.create_app` plus an "Act" nav link (noted as a TODO in the
+module docstring).
+
+**What works**
+
+- **Address → districts.** The visitor enters name + home address;
+  the US Census Geocoder (free, official, no key) resolves state,
+  congressional district, and state senate/house districts. Unmatched
+  addresses get an honest error — districts are never guessed. The
+  address is used only for that lookup: never stored, never logged
+  (the lookup path is read-only; a test proves the database file is
+  byte-identical before and after).
+- **Your own reps only** (SPEC 7.1 constituent principle). State
+  legislators come from our own OpenStates-ingested store,
+  district-matched where the stored district supports it. Where a
+  chamber cannot be district-matched, the page says district matching
+  is partial and lists the full chamber for the visitor to pick from —
+  a match is never claimed that the data does not support. States with
+  no ingested legislators (everything except NC today) show a
+  "not tracked yet" state.
+- **Staff layer (LC/LD).** New `staff_contacts` table (schema.sql +
+  both stores): legislator FK, role ∈ LC / LD / Chief of Staff /
+  District Director, name, published email, source URL, verified-at.
+  It is seeded with **nothing** — rows enter only from verified
+  sources. The lookup page offers an "Also send to their staff"
+  checkbox group only where verified rows exist; otherwise it shows
+  one honest line: *"Staff contacts (LC/LD) are added as we verify
+  them — none on file for your reps yet."*
+- **Compose + send from the visitor's own mail app.** Bill picker =
+  classified bills for the visitor's state with stance shown where
+  tagged; each bill gets a support/oppose choice defaulting from its
+  stance (supportive → support, harmful → oppose, always editable).
+  The send button is one `mailto:` addressed to every selected
+  recipient with a published email (reps + ticked staff), subject/body
+  percent-encoded. Past ~1,800 characters the composer degrades
+  honestly — first recipient only, then first recipient without the
+  body — and says why; a copy-text box is always present. Recipients
+  without a published email are listed separately with an official
+  contact route (form assist) — never silently dropped. **No
+  server-side sending in v1.**
+
+**What is stubbed**
+
+- **Federal delegation** is not in the database: the lookup page links
+  the official house.gov / senate.gov finders instead of naming anyone.
+- **Staff data population** — the table and UI exist; the verified
+  staff ingestion that fills them is future work.
+- **The pattern-email lane (SPEC 7.3 lane 2) is NOT in v1 sends** —
+  the mailto uses published emails only. Form assist links point at
+  the official legislature site where the registry has one (NC today)
+  and at USA.gov's official finder elsewhere, pending the SPEC 7.2
+  50-state registry.
+
 ## Deploy to Render
 
 `render.yaml` (repo root of this app folder) is a Render Blueprint
@@ -159,7 +219,9 @@ is available yet — it never displays invented numbers.
 `schema.sql` is the Postgres DDL (idempotent `CREATE TABLE IF NOT
 EXISTS`): jurisdictions, sessions, legislators, bills (source IDs +
 `change_hash`), bill_versions (with `text_hash` for Phase 2 diffing),
-bill_classifications, votes (lean: roll-call summaries), pipeline_runs.
+bill_classifications, votes (lean: roll-call summaries), pipeline_runs,
+staff_contacts (Act Box staff layer — verified LC/LD/staff rows only,
+starts empty).
 `legitrack.store.PostgresStore` applies it on construction and maps
 the ingestion interface onto the normalised tables (jurisdictions
 resolved from `state_abbr`, bills keyed on `legiscan_bill_id`, detail
@@ -268,7 +330,9 @@ for now, which is the honest result for 14 mostly-local bills.
   draft, pending Jared's sign-off.
 - Web UI exists now (see "Web app" + "Deploy to Render" above) as a
   token-skinned placeholder ahead of the Figma design pass; locally it
-  serves the real NC data. No Act Box, no prediction/copycat/scorecard
-  features (Phases 2–4 in the spec). Votes are roll-call summaries only.
+  serves the real NC data. Act Box v1 exists as a module (see "Act Box
+  (v1)" above) pending its one-line router wiring into the app; no
+  prediction/copycat/scorecard features yet (Phases 2–4 in the spec).
+  Votes are roll-call summaries only.
 - Committee rung of the status ladder needs history/progress events from
   bill detail — designed, not implemented.

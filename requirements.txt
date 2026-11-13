@@ -4,4 +4,5 @@
 # imported lazily, so SQLite local runs never touch it).
 fastapi==0.115.6
 uvicorn==0.34.0
+python-multipart==0.0.20
 psycopg[binary]>=3.2
