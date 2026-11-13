@@ -1,0 +1,16 @@
+# Local data — the live SQLite store is NEVER committed (real pulled data,
+# 1.7MB+, and the deploy rebuilds/serves its own store). See render.yaml.
+legitrack.db
+*.db-journal
+*.db-wal
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# Local env / secrets (API keys live in the environment / Render dashboard only)
+.env

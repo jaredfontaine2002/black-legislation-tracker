@@ -1,0 +1,68 @@
+# Render Blueprint — Black Legislation Tracker (Phase 1 deploy)
+#
+# How to use: push this repo to GitHub, then in the Render dashboard
+# choose New > Blueprint, select the repo, and Apply. Render reads this
+# file and creates the web service, the daily cron job, and the Postgres
+# database below. The two API keys are declared with `sync: false`, which
+# means Render will PROMPT for their values during Blueprint creation —
+# they are never stored in this repo.
+#
+# DATA FLOW (Postgres backend is wired): DATABASE_URL is injected into
+# both services from the managed Postgres below. Wherever DATABASE_URL
+# is set, legitrack uses PostgresStore — the cron's ingestion writes to
+# Postgres (applying schema.sql idempotently) and the web service reads
+# from the same database, so the site shows live counts once the first
+# ingestion run lands. The SQLite LEGITRACK_DB below is only the local/
+# dev default and is ignored while DATABASE_URL is present.
+#
+# Honest notes that remain true:
+#   * The site shows data only after the first cron run populates
+#     Postgres — trigger the cron once after deploy, or wait for the
+#     11:00 UTC schedule. Before that, the landing page says no data is
+#     available rather than showing invented numbers.
+#   * The cron ingests North Carolina only for now (all-state rollout
+#     is a cron command change).
+#   * Render's free Postgres expires after ~30 days — upgrade or export
+#     before then if this deploy becomes permanent.
+
+databases:
+  - name: legitrack-db
+    plan: free
+    databaseName: legitrack
+    user: legitrack
+
+services:
+  # (a) Public web app — reads Postgres via DATABASE_URL (see header)
+  - type: web
+    name: black-legislation-tracker
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt && pip install ."
+    startCommand: "uvicorn legitrack.web:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: LEGITRACK_DB
+        value: legitrack.db   # local/dev fallback only; DATABASE_URL takes precedence
+      - key: DATABASE_URL
+        fromDatabase:
+          name: legitrack-db
+          property: connectionString
+
+  # (b) Daily ingestion — 11:00 UTC ≈ 06:00 ET. DATABASE_URL is set, so
+  # both commands write to Postgres; the --db argument is the SQLite
+  # fallback and is ignored in this environment.
+  - type: cron
+    name: legitrack-daily-ingest
+    env: python
+    plan: starter
+    schedule: "0 11 * * *"
+    buildCommand: "pip install ."
+    startCommand: "python -m legitrack.ingest --state NC --limit 100 --db legitrack.db && python -m legitrack.legislators --state NC --db legitrack.db --per-page 20"
+    envVars:
+      - key: LEGISCAN_API_KEY
+        sync: false   # entered by Jared in the Render dashboard, never in git
+      - key: OPENSTATES_API_KEY
+        sync: false   # entered by Jared in the Render dashboard, never in git
+      - key: DATABASE_URL
+        fromDatabase:
+          name: legitrack-db
+          property: connectionString

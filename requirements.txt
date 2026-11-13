@@ -1,0 +1,7 @@
+# Web service dependencies (Render). The ingestion engine itself is
+# standard-library only; these are only needed to serve the web app,
+# plus psycopg for the Postgres backend (used when DATABASE_URL is set;
+# imported lazily, so SQLite local runs never touch it).
+fastapi==0.115.6
+uvicorn==0.34.0
+psycopg[binary]>=3.2

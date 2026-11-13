@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "legitrack"
+version = "0.1.0"
+description = "Black Legislation Tracker -- Phase 1 ingestion engine (LegiScan + OpenStates)"
+requires-python = ">=3.11"
+# psycopg is the Postgres driver for the Render backend. It is imported
+# lazily — only when DATABASE_URL is set — so local SQLite runs work
+# exactly as before.
+dependencies = ["psycopg[binary]>=3.2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+web = ["fastapi==0.115.6", "uvicorn==0.34.0"]
+
+[project.scripts]
+legitrack-ingest = "legitrack.ingest:main"
+legitrack-web = "legitrack.web:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+legitrack = ["taxonomy.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
