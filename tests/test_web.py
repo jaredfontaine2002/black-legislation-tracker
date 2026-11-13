@@ -119,3 +119,103 @@ def test_missing_db_is_honest_not_invented(tmp_path: Path) -> None:
     assert "No database is attached" in page.text
     health = client.get("/healthz")
     assert health.json()["data_available"] is False
+    assert health.json()["database"] == "unavailable"
+
+
+def test_populated_db_healthz_reports_connected(client: TestClient) -> None:
+    health = client.get("/healthz").json()
+    assert health["database"] == "connected"
+    assert health["data_available"] is True
+    assert health["bills"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Connected-but-empty is NOT "no database attached": a freshly provisioned
+# database (Render Postgres before the first ingestion, or a SQLite file
+# with no schema applied) connects fine but has no tables yet.
+# ---------------------------------------------------------------------------
+
+def test_sqlite_file_without_tables_is_empty_not_unattached(tmp_path: Path) -> None:
+    db = tmp_path / "no-schema.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE unrelated (id INTEGER)")
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(str(db)))
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "The database is connected" in page.text
+    assert "first ingestion run" in page.text
+    assert "No database is attached" not in page.text
+    health = client.get("/healthz").json()
+    assert health["database"] == "connected_empty"
+    assert health["data_available"] is False
+    assert health["bills"] == 0
+
+
+class _FakePgCursor:
+    def __init__(self, row: object) -> None:
+        self._row = row
+
+    def fetchone(self) -> object:
+        return self._row
+
+
+class _FakePgConnSchemaAbsent:
+    """Connects fine, but to_regclass reports no bills table. Any other
+    query would error on a real schema-less database, so it raises here —
+    _stats_pg must return the empty payload before reaching them."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def execute(self, sql: str, params: tuple = ()) -> _FakePgCursor:
+        if "to_regclass" in sql:
+            return _FakePgCursor({"t": None})
+        raise AssertionError(f"unexpected query against schema-less DB: {sql}")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_pg_schema_absent_is_empty_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    import legitrack.web as web
+
+    monkeypatch.setattr(web, "_pg_connect", lambda dsn: _FakePgConnSchemaAbsent())
+    s = web._stats_pg("postgresql://synthetic.invalid/db")
+    assert s["available"] is True
+    assert s["empty"] is True
+    assert s["bills"] == 0
+    assert s["legislators"] == 0
+    assert s["states"] == 0
+    assert s["classified_bills"] == 0
+    assert s["status_breakdown"] == []
+    assert s["category_counts"] == []
+    assert s["last_run"] is None
+
+
+def test_pg_connection_failure_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import legitrack.web as web
+
+    def _boom(dsn: str) -> object:
+        raise RuntimeError("synthetic connect failure")
+
+    monkeypatch.setattr(web, "_pg_connect", _boom)
+    assert web._stats_pg("postgresql://synthetic.invalid/db") == {"available": False}
+
+
+def test_pg_schema_absent_landing_and_healthz(monkeypatch: pytest.MonkeyPatch) -> None:
+    import legitrack.web as web
+
+    monkeypatch.setattr(web, "_pg_connect", lambda dsn: _FakePgConnSchemaAbsent())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://synthetic.invalid/db")
+    client = TestClient(web.create_app())
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "The database is connected" in page.text
+    assert "first ingestion run" in page.text
+    assert "No database is attached" not in page.text
+    health = client.get("/healthz").json()
+    assert health["database"] == "connected_empty"
+    assert health["data_available"] is False
+    assert health["bills"] == 0

@@ -191,17 +191,45 @@ def _scalar(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> int:
     return int(row[0]) if row and row[0] is not None else 0
 
 
+def _empty_stats() -> dict[str, Any]:
+    """Payload for a database that IS attached but has no schema yet.
+
+    Distinct from ``{"available": False}`` (no database configured or
+    reachable): the connection works, the ingestion pipeline simply has
+    not run, so there is nothing to count. Zeroes here are real zeroes,
+    read from a live connection — never invented numbers.
+    """
+    return {
+        "available": True,
+        "empty": True,
+        "bills": 0,
+        "bills_with_detail": 0,
+        "legislators": 0,
+        "states": 0,
+        "classified_bills": 0,
+        "status_breakdown": [],
+        "category_counts": [],
+        "last_run": None,
+    }
+
+
 def _stats(db_path: str) -> dict[str, Any]:
     conn = _connect(db_path)
     if conn is None:
         return {"available": False}
     try:
+        has_bills = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'bills'"
+        ).fetchone()
+        if has_bills is None:
+            return _empty_stats()
         last_run = conn.execute(
             "SELECT job, status, started_at, finished_at FROM pipeline_runs "
             "ORDER BY id DESC LIMIT 1"
         ).fetchone()
         return {
             "available": True,
+            "empty": False,
             "bills": _scalar(conn, "SELECT COUNT(*) FROM bills"),
             "bills_with_detail": _scalar(
                 conn, "SELECT COUNT(*) FROM bills WHERE detail_json IS NOT NULL"
@@ -333,6 +361,14 @@ def _stats_pg(dsn: str) -> dict[str, Any]:
     except Exception:
         return {"available": False}
     try:
+        # A freshly provisioned database connects fine but has no tables
+        # yet — schema.sql is applied by the ingestion store, never by
+        # this read-only app. That is "connected but empty", NOT "no
+        # database attached", and the two must not be conflated.
+        reg = conn.execute("SELECT to_regclass('public.bills') AS t").fetchone()
+        reg_value = reg["t"] if isinstance(reg, dict) else reg[0]
+        if reg_value is None:
+            return _empty_stats()
         last_run = conn.execute(
             "SELECT job, status, started_at, finished_at FROM pipeline_runs "
             "ORDER BY id DESC LIMIT 1"
@@ -342,6 +378,7 @@ def _stats_pg(dsn: str) -> dict[str, Any]:
             last = {k: _iso(v) for k, v in dict(last_run).items()}
         return {
             "available": True,
+            "empty": False,
             "bills": _pg_scalar(conn, "SELECT COUNT(*) AS n FROM bills"),
             "bills_with_detail": _pg_scalar(
                 conn, "SELECT COUNT(*) AS n FROM bills WHERE detail IS NOT NULL"
@@ -520,8 +557,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/healthz")
     def healthz() -> JSONResponse:
         s = stats()
+        if not s.get("available"):
+            database = "unavailable"
+        elif s.get("empty"):
+            database = "connected_empty"
+        else:
+            database = "connected"
         return JSONResponse(
-            {"status": "ok", "data_available": bool(s.get("available")),
+            {"status": "ok",
+             "data_available": bool(s.get("available")) and not s.get("empty"),
+             "database": database,
              "bills": s.get("bills", 0)}
         )
 
@@ -537,6 +582,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "Run the ingestion pipeline against the configured database "
                 "(DATABASE_URL / LEGITRACK_DB) and the live counts appear here "
                 "automatically.</div></div>"
+            )
+            return HTMLResponse(_page("Overview", body))
+
+        if s.get("empty"):
+            body = (
+                '<div class="hero"><h1>Legislation that affects Black Americans, '
+                "tracked daily.</h1>"
+                '<div class="notice">The database is connected — it just '
+                "hasn&rsquo;t received its first ingestion run yet, so there are "
+                "no bills to count. This page never displays invented numbers; "
+                "live counts appear automatically once the pipeline runs."
+                "</div></div>"
             )
             return HTMLResponse(_page("Overview", body))
 
