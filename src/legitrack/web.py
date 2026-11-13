@@ -34,6 +34,8 @@ from typing import Any
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from .map_data import US_MAP_VIEWBOX, US_STATE_NAMES, US_STATE_PATHS
+
 PRODUCT_NAME = "Black Legislation Tracker"
 
 # ---------------------------------------------------------------------------
@@ -53,6 +55,11 @@ TOKENS_CSS = """
   --color-positive: #3fb97f;
   --color-negative: #e05d5d;
   --color-info: #5aa2e0;
+  --color-score-low: #e05d5d;      /* Friendliness Score 0 — most harmful */
+  --color-score-mid: #e9c44c;      /* Friendliness Score 50 */
+  --color-score-high: #3fb97f;     /* Friendliness Score 100 — most supportive */
+  --color-map-untracked: #2b3644;  /* state with no data / not enough data */
+  --color-map-stroke: #0b0f14;
   --font-display: "Georgia", "Times New Roman", serif;
   --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -158,6 +165,26 @@ table.data tr:last-child td { border-bottom: none; }
   padding: var(--space-md) var(--space-lg); margin: var(--space-lg) 0;
   background: var(--color-surface); color: var(--color-text-muted);
 }
+.us-map { width: 100%; height: auto; display: block; }
+.us-map path { stroke: var(--color-map-stroke); stroke-width: 0.8; }
+.us-map path.untracked { fill: var(--color-map-untracked); }
+.map-legend {
+  display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg);
+  align-items: center; margin: var(--space-md) 0 var(--space-lg);
+  color: var(--color-text-muted); font-size: 0.9rem;
+}
+.legend-scale { display: flex; align-items: center; gap: var(--space-sm); }
+.legend-bar {
+  width: 220px; height: 12px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--color-score-low), var(--color-score-mid), var(--color-score-high));
+  border: 1px solid var(--color-border);
+}
+.swatch {
+  display: inline-block; width: 14px; height: 14px; border-radius: 3px;
+  background: var(--color-map-untracked); border: 1px solid var(--color-border);
+  vertical-align: -2px; margin-right: var(--space-xs);
+}
+.method { color: var(--color-text-muted); font-size: 0.92rem; max-width: 52rem; }
 footer.site {
   border-top: 1px solid var(--color-border); color: var(--color-text-muted);
   padding: var(--space-lg) 0 var(--space-xl); font-size: 0.88rem; margin-top: var(--space-xl);
@@ -321,6 +348,78 @@ def _legislators(db_path: str, limit: int) -> list[dict[str, Any]]:
             (limit,),
         )
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# Minimum stance-tagged (supportive + harmful) bills before a state earns
+# a Friendliness Score on the /map page — below this it stays grey.
+MAP_MIN_SAMPLE = 5
+
+
+def _empty_state_scores() -> dict[str, Any]:
+    """Same distinction as _empty_stats: attached but schema-less."""
+    return {"available": True, "empty": True, "counts": {}}
+
+
+def _state_scores(db_path: str) -> dict[str, Any]:
+    """Per-state Friendliness Score inputs from the SQLite store.
+
+    Returns counts[abbr] = {"classified", "supportive", "harmful"} with
+    DISTINCT-bill counts, classifications joined through bills -> sessions.
+
+    Defensive about the stance engine's schema: bill_classifications may
+    not have a ``stance`` column yet (it lands with the stance pass), and
+    the table may not exist at all. Absence is "no stance data" — never
+    an error, never invented numbers.
+    """
+    conn = _connect(db_path)
+    if conn is None:
+        return {"available": False}
+    try:
+        tables = {
+            str(r[0])
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        if "bills" not in tables:
+            return _empty_state_scores()
+        counts: dict[str, dict[str, int]] = {}
+        if "bill_classifications" in tables and "sessions" in tables:
+            cols = {
+                str(r[1])
+                for r in conn.execute("PRAGMA table_info(bill_classifications)")
+            }
+            join = (
+                "FROM bill_classifications c "
+                "JOIN bills b ON b.legiscan_bill_id = c.legiscan_bill_id "
+                "JOIN sessions s ON s.legiscan_session_id = b.legiscan_session_id "
+            )
+            if "stance" in cols:
+                sql = (
+                    "SELECT s.state_abbr AS abbr, "
+                    "COUNT(DISTINCT c.legiscan_bill_id) AS classified, "
+                    "COUNT(DISTINCT CASE WHEN c.stance = 'supportive' "
+                    "THEN c.legiscan_bill_id END) AS supportive, "
+                    "COUNT(DISTINCT CASE WHEN c.stance = 'harmful' "
+                    "THEN c.legiscan_bill_id END) AS harmful "
+                    + join
+                    + "GROUP BY s.state_abbr"
+                )
+            else:
+                sql = (
+                    "SELECT s.state_abbr AS abbr, "
+                    "COUNT(DISTINCT c.legiscan_bill_id) AS classified, "
+                    "0 AS supportive, 0 AS harmful "
+                    + join
+                    + "GROUP BY s.state_abbr"
+                )
+            for r in conn.execute(sql):
+                counts[str(r["abbr"])] = {
+                    "classified": int(r["classified"]),
+                    "supportive": int(r["supportive"]),
+                    "harmful": int(r["harmful"]),
+                }
+        return {"available": True, "empty": False, "counts": counts}
     finally:
         conn.close()
 
@@ -492,6 +591,67 @@ def _legislators_pg(dsn: str, limit: int) -> list[dict[str, Any]]:
         conn.close()
 
 
+def _state_scores_pg(dsn: str) -> dict[str, Any]:
+    """Postgres twin of _state_scores — same payload shape, same
+    defensive stance-column handling (checked via information_schema)."""
+    try:
+        conn = _pg_connect(dsn)
+    except Exception:
+        return {"available": False}
+    try:
+        reg = conn.execute("SELECT to_regclass('public.bills') AS t").fetchone()
+        reg_value = reg["t"] if isinstance(reg, dict) else reg[0]
+        if reg_value is None:
+            return _empty_state_scores()
+        counts: dict[str, dict[str, int]] = {}
+        reg = conn.execute(
+            "SELECT to_regclass('public.bill_classifications') AS t"
+        ).fetchone()
+        reg_value = reg["t"] if isinstance(reg, dict) else reg[0]
+        if reg_value is not None:
+            stance_row = conn.execute(
+                "SELECT 1 AS x FROM information_schema.columns "
+                "WHERE table_name = 'bill_classifications' AND column_name = 'stance'"
+            ).fetchone()
+            join = (
+                "FROM bill_classifications c "
+                "JOIN bills b ON b.id = c.bill_id "
+                "JOIN sessions s ON s.id = b.session_id "
+                "JOIN jurisdictions j ON j.id = s.jurisdiction_id "
+            )
+            if stance_row:
+                sql = (
+                    "SELECT j.state_abbr AS abbr, "
+                    "COUNT(DISTINCT c.bill_id) AS classified, "
+                    "COUNT(DISTINCT CASE WHEN c.stance = 'supportive' "
+                    "THEN c.bill_id END) AS supportive, "
+                    "COUNT(DISTINCT CASE WHEN c.stance = 'harmful' "
+                    "THEN c.bill_id END) AS harmful "
+                    + join
+                    + "GROUP BY j.state_abbr"
+                )
+            else:
+                sql = (
+                    "SELECT j.state_abbr AS abbr, "
+                    "COUNT(DISTINCT c.bill_id) AS classified, "
+                    "0 AS supportive, 0 AS harmful "
+                    + join
+                    + "GROUP BY j.state_abbr"
+                )
+            for r in conn.execute(sql):
+                row = dict(r)
+                counts[str(row["abbr"])] = {
+                    "classified": int(row["classified"]),
+                    "supportive": int(row["supportive"]),
+                    "harmful": int(row["harmful"]),
+                }
+        return {"available": True, "empty": False, "counts": counts}
+    except Exception:
+        return {"available": False}
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
@@ -509,7 +669,7 @@ def _page(title: str, body: str) -> str:
 <header class="site"><div class="wrap">
   <a class="brand" href="/">{_esc(PRODUCT_NAME)}</a>
   <nav class="main">
-    <a href="/">Overview</a><a href="/bills">Bills</a><a href="/legislators">Legislators</a>
+    <a href="/">Overview</a><a href="/bills">Bills</a><a href="/legislators">Legislators</a><a href="/map">Map</a>
   </nav>
 </div></header>
 <main class="wrap">{body}</main>
@@ -523,6 +683,30 @@ def _page(title: str, body: str) -> str:
 
 
 _CHAMBER_LABELS = {"lower": "House", "upper": "Senate", "executive": "Executive", "legislature": "Legislature"}
+
+
+def _friendliness_score(supportive: int, harmful: int) -> int | None:
+    """100 x supportive / (supportive + harmful), or None below the
+    minimum sample (MAP_MIN_SAMPLE tagged bills) — None means the state
+    stays grey, never a score built on a handful of bills."""
+    tagged = supportive + harmful
+    if tagged < MAP_MIN_SAMPLE:
+        return None
+    return round(100 * supportive / tagged)
+
+
+# Friendliness Score ramp on an absolute 0-100 scale: red (0) -> amber
+# (50) -> green (100). Hex values mirror the --color-score-* tokens.
+_SCORE_STOPS = ((0, (224, 93, 93)), (50, (233, 196, 76)), (100, (63, 185, 127)))
+
+
+def _score_color(score: int) -> str:
+    for (lo, c_lo), (hi, c_hi) in zip(_SCORE_STOPS, _SCORE_STOPS[1:]):
+        if lo <= score <= hi:
+            frac = (score - lo) / (hi - lo) if hi > lo else 0.0
+            rgb = tuple(round(a + (b - a) * frac) for a, b in zip(c_lo, c_hi))
+            return "#{:02x}{:02x}{:02x}".format(*rgb)
+    return "#{:02x}{:02x}{:02x}".format(*_SCORE_STOPS[-1][1])
 
 
 def create_app(db_path: str | None = None) -> FastAPI:
@@ -551,6 +735,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     def legislators_list(limit: int) -> list[dict[str, Any]]:
         return _legislators_pg(database_url, limit) if use_pg else _legislators(resolved, limit)
+
+    def state_scores() -> dict[str, Any]:
+        return _state_scores_pg(database_url) if use_pg else _state_scores(resolved)
 
     app = FastAPI(title=PRODUCT_NAME)
 
@@ -717,6 +904,102 @@ def create_app(db_path: str | None = None) -> FastAPI:
 <div class="cards">{cards}</div>
 """
         return HTMLResponse(_page("Legislators", body))
+
+    @app.get("/map", response_class=HTMLResponse)
+    def map_page() -> HTMLResponse:
+        data = state_scores()
+        if not data.get("available"):
+            body = (
+                '<div class="hero"><h1>Friendliness by state.</h1>'
+                '<div class="notice">No database is attached to this deployment yet, '
+                "so no counts are shown — this page never displays invented numbers. "
+                "Run the ingestion pipeline against the configured database "
+                "(DATABASE_URL / LEGITRACK_DB) and the live counts appear here "
+                "automatically.</div></div>"
+            )
+            return HTMLResponse(_page("Map", body))
+
+        counts = data.get("counts", {})
+        paths_html = ""
+        ranked: list[tuple[str, dict[str, int], int | None]] = []
+        for abbr, name in US_STATE_NAMES.items():
+            info = counts.get(abbr)
+            if not info or info["classified"] == 0:
+                tooltip = f"{name} — not tracked yet"
+                paths_html += (
+                    f'<path d="{US_STATE_PATHS[abbr]}" class="untracked">'
+                    f"<title>{_esc(tooltip)}</title></path>"
+                )
+                continue
+            sup, harm = info["supportive"], info["harmful"]
+            tagged = sup + harm
+            score = _friendliness_score(sup, harm)
+            if score is None:
+                bill_word = "bill" if tagged == 1 else "bills"
+                tooltip = f"{name} — not enough data yet ({tagged} tagged {bill_word})"
+                paths_html += (
+                    f'<path d="{US_STATE_PATHS[abbr]}" class="untracked">'
+                    f"<title>{_esc(tooltip)}</title></path>"
+                )
+            else:
+                tooltip = f"{name} — score {score} ({sup} supportive · {harm} harmful)"
+                paths_html += (
+                    f'<path d="{US_STATE_PATHS[abbr]}" style="fill:{_score_color(score)}">'
+                    f"<title>{_esc(tooltip)}</title></path>"
+                )
+            ranked.append((name, info, score))
+
+        # Ranked table — the accessible alternative to the colour scale:
+        # scored states first (best score first), then states still below
+        # the minimum sample (most tagged bills first).
+        ranked.sort(
+            key=lambda item: (
+                item[2] is None,
+                -(item[2] or 0),
+                -(item[1]["supportive"] + item[1]["harmful"]),
+                item[0],
+            )
+        )
+        rows = ""
+        for name, info, score in ranked:
+            score_cell = str(score) if score is not None else "Not enough data yet"
+            rows += (
+                f"<tr><td>{_esc(name)}</td><td>{_fmt(info['supportive'])}</td>"
+                f"<td>{_fmt(info['harmful'])}</td><td>{score_cell}</td></tr>"
+            )
+        if not rows:
+            rows = '<tr><td colspan="4">No states tracked yet.</td></tr>'
+
+        notice = ""
+        if data.get("empty"):
+            notice = (
+                '<div class="notice">The database is connected — it just '
+                "hasn&rsquo;t received its first ingestion run yet, so there is "
+                "no stance data to map yet. Scores appear automatically once "
+                "the pipeline runs.</div>"
+            )
+        body = f"""
+<div class="hero"><h1>Friendliness by state</h1>
+<p class="lede">How supportive is each state&rsquo;s legislation for Black
+Americans? Colour shows the Friendliness Score, computed from the stance of
+classified bills affecting Black Americans in each state.</p></div>
+{notice}
+<svg class="us-map" viewBox="{US_MAP_VIEWBOX}" role="img" aria-label="Map of the United States coloured by Friendliness Score">{paths_html}</svg>
+<div class="map-legend">
+  <span class="legend-scale"><span>0 · most harmful</span><span class="legend-bar"></span><span>100 · most supportive</span></span>
+  <span><span class="swatch"></span>Not tracked yet</span>
+  <span><span class="swatch"></span>Not enough data yet</span>
+</div>
+<p class="method"><strong>How the score works.</strong> Score = share of
+stance-tagged bills that are supportive: 100 &times; supportive &divide;
+(supportive + harmful). Stance is rules-based (v1) from bill language; mixed
+and unclear bills are excluded. States need at least 5 tagged bills to be
+scored.</p>
+<section class="block"><h2>States ranked by Friendliness Score</h2>
+<table class="data"><tr><th>State</th><th>Supportive bills</th><th>Harmful bills</th><th>Friendliness Score</th></tr>{rows}</table>
+</section>
+"""
+        return HTMLResponse(_page("Map", body))
 
     return app
 
