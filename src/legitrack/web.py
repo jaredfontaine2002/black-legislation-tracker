@@ -669,7 +669,7 @@ def _page(title: str, body: str) -> str:
 <header class="site"><div class="wrap">
   <a class="brand" href="/">{_esc(PRODUCT_NAME)}</a>
   <nav class="main">
-    <a href="/">Overview</a><a href="/bills">Bills</a><a href="/legislators">Legislators</a><a href="/map">Map</a>
+    <a href="/">Overview</a><a href="/bills">Bills</a><a href="/legislators">Legislators</a><a href="/map">Map</a><a href="/act">Act</a>
   </nav>
 </div></header>
 <main class="wrap">{body}</main>
@@ -740,6 +740,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return _state_scores_pg(database_url) if use_pg else _state_scores(resolved)
 
     app = FastAPI(title=PRODUCT_NAME)
+
+    from .actbox import create_actbox_router
+
+    app.include_router(create_actbox_router(db_path if explicit else None))
 
     @app.get("/healthz")
     def healthz() -> JSONResponse:
