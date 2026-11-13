@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .legiscan_client import LegiScanClient, MasterBill, Session
+from .stance import apply_stance
 from .status import map_legiscan_status
 from .store import LocalStore, PostgresStore, open_store
 from .taxonomy import classify_legiscan_bill
@@ -139,7 +140,12 @@ def ingest_state(
         for bill in to_fetch:
             detail = client.get_bill(bill.bill_id)
             store.store_detail(bill.bill_id, detail)
-            store.replace_classifications(bill.bill_id, classify_legiscan_bill(detail))
+            classifications = apply_stance(
+                classify_legiscan_bill(detail),
+                title=str(detail.get("title", "")),
+                subjects=detail.get("subjects") or [],
+            )
+            store.replace_classifications(bill.bill_id, classifications)
             fetched += 1
     except Exception as exc:
         store.finish_run(

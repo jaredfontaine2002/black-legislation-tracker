@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS bill_classifications (
     confidence REAL NOT NULL,
     method TEXT NOT NULL DEFAULT 'rule',
     matched_terms TEXT,
+    stance TEXT,
+    stance_terms TEXT,
     PRIMARY KEY (legiscan_bill_id, category_id, method)
 );
 CREATE TABLE IF NOT EXISTS legislators (
@@ -68,6 +70,17 @@ CREATE TABLE IF NOT EXISTS legislators (
     state_abbr TEXT,
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS staff_contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    legislator_openstates_id TEXT NOT NULL REFERENCES legislators(openstates_person_id),
+    role TEXT NOT NULL CHECK (role IN ('LC', 'LD', 'Chief of Staff', 'District Director')),
+    name TEXT NOT NULL,
+    email TEXT,
+    source_url TEXT,
+    verified_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +104,11 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+#: Staff roles the Act Box staff layer recognises (SPEC sections 7 / 12).
+#: LC = Legislative Correspondent, LD = Legislative Director.
+STAFF_ROLES = ("LC", "LD", "Chief of Staff", "District Director")
+
+
 class LocalStore:
     """SQLite-backed Phase 1 store. Pass ':memory:' for tests."""
 
@@ -98,7 +116,23 @@ class LocalStore:
         self._conn = sqlite3.connect(str(path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Additive guards for databases created before a column existed
+        (CREATE TABLE IF NOT EXISTS above cannot add columns to an
+        existing table). NULL stance on old rows means "stance pass has
+        not run for this row" and reads tolerate it."""
+        columns = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(bill_classifications)")
+        }
+        for column in ("stance", "stance_terms"):
+            if column not in columns:
+                self._conn.execute(
+                    f"ALTER TABLE bill_classifications ADD COLUMN {column} TEXT"
+                )
 
     def close(self) -> None:
         self._conn.close()
@@ -225,6 +259,58 @@ class LocalStore:
             ).fetchone()
         return int(row["n"])
 
+    # -- staff contacts (Act Box staff layer) ---------------------------------
+    # Rows enter ONLY from verified sources (a future staff ingestion);
+    # nothing here constructs or guesses an address. Starts empty.
+
+    def add_staff_contact(
+        self,
+        openstates_person_id: str,
+        *,
+        role: str,
+        name: str,
+        email: str | None = None,
+        source_url: str | None = None,
+        verified_at: str | None = None,
+    ) -> int:
+        """Store one verified staff contact; returns the new row id."""
+        if role not in STAFF_ROLES:
+            raise ValueError(f"unknown staff role {role!r}; expected one of {STAFF_ROLES}")
+        now = utc_now_iso()
+        cur = self._conn.execute(
+            """
+            INSERT INTO staff_contacts (legislator_openstates_id, role, name,
+                                        email, source_url, verified_at,
+                                        created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                openstates_person_id, role, name, email or None,
+                source_url or None, verified_at or None, now, now,
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def staff_contacts_for(self, openstates_person_ids: list[str]) -> list[dict[str, Any]]:
+        """All stored staff contacts for the given legislators, role order
+        LD first (the staffer who writes the memo), then LC, CoS, DD."""
+        if not openstates_person_ids:
+            return []
+        placeholders = ", ".join("?" for _ in openstates_person_ids)
+        rows = self._conn.execute(
+            f"""
+            SELECT id, legislator_openstates_id, role, name, email,
+                   source_url, verified_at
+            FROM staff_contacts
+            WHERE legislator_openstates_id IN ({placeholders})
+            ORDER BY CASE role WHEN 'LD' THEN 0 WHEN 'LC' THEN 1
+                     WHEN 'Chief of Staff' THEN 2 ELSE 3 END, name
+            """,
+            tuple(openstates_person_ids),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # -- classifications --------------------------------------------------------
 
     def replace_classifications(self, bill_id: int, classifications: list[Any]) -> None:
@@ -236,8 +322,9 @@ class LocalStore:
             self._conn.execute(
                 """
                 INSERT OR REPLACE INTO bill_classifications
-                    (legiscan_bill_id, category_id, category_name, confidence, method, matched_terms)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (legiscan_bill_id, category_id, category_name, confidence, method,
+                     matched_terms, stance, stance_terms)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(bill_id),
@@ -246,6 +333,8 @@ class LocalStore:
                     c.confidence,
                     c.method,
                     json.dumps(list(c.matched_terms) + list(getattr(c, "matched_subjects", ()))),
+                    getattr(c, "stance", None),
+                    getattr(c, "stance_terms", "") or None,
                 ),
             )
         self._conn.commit()
@@ -581,6 +670,66 @@ class PostgresStore:
             return int(row["n"])
         return int(row[0])
 
+    # -- staff contacts (Act Box staff layer) ---------------------------------
+    # Same interface as LocalStore; schema.sql keys staff_contacts on the
+    # internal legislators PK, so inserts resolve it from the OpenStates
+    # person id the rest of the interface uses. Rows enter ONLY from
+    # verified sources; nothing here constructs or guesses an address.
+
+    def add_staff_contact(
+        self,
+        openstates_person_id: str,
+        *,
+        role: str,
+        name: str,
+        email: str | None = None,
+        source_url: str | None = None,
+        verified_at: str | None = None,
+    ) -> int:
+        """Store one verified staff contact; returns the new row id."""
+        if role not in STAFF_ROLES:
+            raise ValueError(f"unknown staff role {role!r}; expected one of {STAFF_ROLES}")
+        row = self._conn.execute(
+            "SELECT id FROM legislators WHERE openstates_person_id = %s",
+            (openstates_person_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"unknown legislator {openstates_person_id!r}")
+        legislator_pk = _row_id(row)
+        row = self._conn.execute(
+            """
+            INSERT INTO staff_contacts (legislator_id, role, name, email,
+                                        source_url, verified_at)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+            """,
+            (
+                legislator_pk, role, name, email or None,
+                source_url or None, verified_at or None,
+            ),
+        ).fetchone()
+        self._conn.commit()
+        return _row_id(row)
+
+    def staff_contacts_for(self, openstates_person_ids: list[str]) -> list[dict[str, Any]]:
+        """All stored staff contacts for the given legislators (LD first)."""
+        if not openstates_person_ids:
+            return []
+        placeholders = ", ".join("%s" for _ in openstates_person_ids)
+        rows = self._conn.execute(
+            f"""
+            SELECT sc.id, l.openstates_person_id AS legislator_openstates_id,
+                   sc.role, sc.name, sc.email, sc.source_url,
+                   sc.verified_at::text AS verified_at
+            FROM staff_contacts sc
+            JOIN legislators l ON l.id = sc.legislator_id
+            WHERE l.openstates_person_id IN ({placeholders})
+            ORDER BY CASE sc.role WHEN 'LD' THEN 0 WHEN 'LC' THEN 1
+                     WHEN 'Chief of Staff' THEN 2 ELSE 3 END, sc.name
+            """,
+            tuple(openstates_person_ids),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # -- classifications --------------------------------------------------------
 
     def replace_classifications(self, bill_id: int, classifications: list[Any]) -> None:
@@ -602,12 +751,15 @@ class PostgresStore:
             self._conn.execute(
                 """
                 INSERT INTO bill_classifications
-                    (bill_id, category, category_name, confidence, method, matched_terms)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (bill_id, category, category_name, confidence, method,
+                     matched_terms, stance, stance_terms)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (bill_id, category, method) DO UPDATE SET
                     category_name=EXCLUDED.category_name,
                     confidence=EXCLUDED.confidence,
-                    matched_terms=EXCLUDED.matched_terms
+                    matched_terms=EXCLUDED.matched_terms,
+                    stance=EXCLUDED.stance,
+                    stance_terms=EXCLUDED.stance_terms
                 """,
                 (
                     bill_pk,
@@ -616,6 +768,10 @@ class PostgresStore:
                     c.confidence,
                     c.method,
                     _jsonb_param(matched),
+                    getattr(c, "stance", None),
+                    # stance_terms is a TEXT column holding a JSON string —
+                    # passed through as-is, NOT Jsonb-wrapped.
+                    getattr(c, "stance_terms", "") or None,
                 ),
             )
         self._conn.commit()

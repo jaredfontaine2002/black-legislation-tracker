@@ -110,6 +110,8 @@ CREATE TABLE IF NOT EXISTS bill_classifications (
     method              TEXT NOT NULL DEFAULT 'rule',  -- rule / model / human
     reviewer_status     TEXT NOT NULL DEFAULT 'pending',
     matched_terms       JSONB,                         -- terms/subjects that fired, for auditability
+    stance              TEXT,                          -- supportive / harmful / mixed / unknown (legitrack.stance rules v1); NULL = stance pass not run
+    stance_terms        TEXT,                          -- JSON {"supportive": [...], "harmful": [...]} — signal terms that fired, for auditability
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (bill_id, category, method)
 );
@@ -158,5 +160,27 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started ON pipeline_runs(started_at
 -- PostgresStore matches the SQLite mirror's interface). Idempotent.
 ALTER TABLE bills ADD COLUMN IF NOT EXISTS detail JSONB;
 ALTER TABLE bill_classifications ADD COLUMN IF NOT EXISTS category_name TEXT;
+ALTER TABLE bill_classifications ADD COLUMN IF NOT EXISTS stance TEXT;
+ALTER TABLE bill_classifications ADD COLUMN IF NOT EXISTS stance_terms TEXT;
 ALTER TABLE legislators ADD COLUMN IF NOT EXISTS role_title TEXT;
 ALTER TABLE legislators ADD COLUMN IF NOT EXISTS state_abbr TEXT;
+
+-- Act Box staff layer (SPEC sections 7 / 12): the people around a member
+-- who actually read constituent mail. LC = Legislative Correspondent,
+-- LD = Legislative Director. Rows are added ONLY from verified sources
+-- (official staff directories / office pages) -- never pattern-guessed --
+-- so this table starts empty and fills state by state; the Act Box shows
+-- an honest "none on file" line wherever no verified row exists.
+CREATE TABLE IF NOT EXISTS staff_contacts (
+    id                  BIGSERIAL PRIMARY KEY,
+    legislator_id       BIGINT NOT NULL REFERENCES legislators(id) ON DELETE CASCADE,
+    role                TEXT NOT NULL
+                        CHECK (role IN ('LC', 'LD', 'Chief of Staff', 'District Director')),
+    name                TEXT NOT NULL,
+    email               TEXT,                        -- published address only; NULL = reach via the member's office/form
+    source_url          TEXT,                        -- where the contact was verified
+    verified_at         TIMESTAMPTZ,                 -- when the row was last verified against source_url
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_staff_contacts_legislator ON staff_contacts(legislator_id);

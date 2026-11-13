@@ -56,6 +56,10 @@ class Classification:
     taxonomy_version: str = ""
     matched_terms: tuple[str, ...] = field(default_factory=tuple)
     matched_subjects: tuple[str, ...] = field(default_factory=tuple)
+    # Filled in by legitrack.stance during ingestion (apply_stance);
+    # None / "" when the stance pass has not run for this row.
+    stance: str | None = None  # supportive / harmful / mixed / unknown
+    stance_terms: str = ""  # JSON: {"supportive": [...], "harmful": [...]}
 
 
 @dataclass(frozen=True)

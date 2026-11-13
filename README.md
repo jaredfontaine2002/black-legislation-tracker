@@ -167,10 +167,11 @@ payloads in the `bills.detail` JSONB column, classifications linked by
 internal bill PK with both category id and label). The local run uses
 the SQLite mirror in the same module, selected by
 `legitrack.store.open_store()` whenever `DATABASE_URL` is unset, with
-the same upsert keys. Three columns were added to schema.sql for this
+the same upsert keys. Columns were added to schema.sql for this
 parity (each commented in the DDL): `bills.detail`,
 `bill_classifications.category_name`, `legislators.role_title` +
-`legislators.state_abbr`.
+`legislators.state_abbr`, and — for the stance engine —
+`bill_classifications.stance` + `bill_classifications.stance_terms`.
 
 ## Status ladder
 
@@ -180,6 +181,48 @@ them onto the public ladder Introduced → Committee → Passed chamber →
 Passed both → Signed/Vetoed → Dead — conservatively: **the status code
 carries no committee stage**, so code 1 stays "Introduced" rather than
 guessing "Committee", and unknown codes map to "Unknown", never a guess.
+
+## Friendliness Score & stance (v1)
+
+The map colours each state by a **Friendliness Score**:
+
+    score = 100 × supportive ÷ (supportive + harmful)
+
+counted over **distinct tagged bills**. `mixed` and `unknown` bills
+are excluded from the formula entirely, and a state needs **at least
+5 tagged (supportive or harmful) bills** before it gets a score at
+all — below that it shows as unscored rather than wearing a colour
+computed from one or two bills.
+
+Every classification row carries a stance tag from
+`legitrack.stance` (rules v1, `stance.json` — the signal lists are
+inspectable without reading code). Signal terms are matched against
+the bill's **title + subjects**, plus that classification row's own
+matched terms, and the terms that fired are stored in
+`bill_classifications.stance_terms` as
+`{"supportive": [...], "harmful": [...]}` — the same auditability
+pattern as the taxonomy. Verdicts: only supportive signals →
+`supportive`; only harmful → `harmful`; both → `mixed`; neither →
+`unknown`, never a guess. Stance is per classification row, not per
+bill, and there are deliberately **no category→stance defaults** — a
+voting bill can cut either way, so the signals decide. Matching uses
+span containment, so the supportive phrase "ban the box" is not
+poisoned by the harmful term "ban" inside it, and bare "equity" is
+intentionally not a supportive signal (bills banning diversity
+programs name "Diversity, Equity and Inclusion" in their titles).
+
+**Limits (v1):** the pass reads titles and subjects only — no bill
+full text, no model judgement. A bill whose direction lives only in
+its text reads `unknown` until the Phase 2 full-text pass lands, and
+naive terms cut both ways ("repeal" scores harmful even when the
+repealed law was itself discriminatory). Treat v1 scores as a
+transparent first draft a reviewer can audit row by row, not as
+ground truth. Existing local rows were tagged with
+`scripts/backfill_stance.py`; new ingestion runs tag automatically.
+First backfill (NC, 2026-11-13): 20 classification rows on 14 bills →
+2 supportive rows (1 bill, the Fair Maps Act), 0 harmful, 0 mixed,
+18 unknown — NC is below the 5-bill threshold and therefore unscored
+for now, which is the honest result for 14 mostly-local bills.
 
 ## What is proven vs stubbed
 
@@ -219,8 +262,9 @@ guessing "Committee", and unknown codes map to "Unknown", never a guess.
   parsed and upserted into the local store keyed on the OpenStates
   person id, storing only published fields. Its first live run follows
   the same one-command pattern as the LegiScan ingestion.
-- Rules v1 classification: keyword/subject matching only, no direction
-  tags, no summaries, no model pass (Phase 2). Taxonomy is the SPEC 6.2
+- Rules v1 classification: keyword/subject matching, plus the
+  rules-based stance v1 above (title/subject signals only). No
+  summaries, no model pass (Phase 2). Taxonomy is the SPEC 6.2
   draft, pending Jared's sign-off.
 - Web UI exists now (see "Web app" + "Deploy to Render" above) as a
   token-skinned placeholder ahead of the Figma design pass; locally it

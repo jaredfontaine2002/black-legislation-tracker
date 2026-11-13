@@ -24,7 +24,7 @@ legitrack-web = "legitrack.web:run"
 where = ["src"]
 
 [tool.setuptools.package-data]
-legitrack = ["taxonomy.json"]
+legitrack = ["taxonomy.json", "stance.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
