@@ -44,24 +44,26 @@ PRODUCT_NAME = "Black Legislation Tracker"
 # ---------------------------------------------------------------------------
 TOKENS_CSS = """
 :root {
-  --color-bg: #0b0f14;
-  --color-surface: #131a22;
-  --color-surface-raised: #1a232e;
-  --color-border: #26313d;
-  --color-text: #e8eef4;
-  --color-text-muted: #93a3b1;
-  --color-accent: #d9a441;        /* gold — primary accent */
+  --color-bg: #0a0c0e;             /* ink-black — archival, not corporate navy */
+  --color-surface: #14181d;
+  --color-surface-raised: #1c222a;
+  --color-border: #2c3e50;
+  --color-text: #f4f3ef;           /* warm white */
+  --color-text-muted: #9fa6b2;
+  --color-accent: #d9a441;         /* gold — highlights, borders, key numbers */
   --color-accent-strong: #f0bc55;
-  --color-positive: #3fb97f;
-  --color-negative: #e05d5d;
+  --color-red: #c1272d;            /* Pan-African red — urgent / harmful / Act Now */
+  --color-green: #1a7a3a;          /* Pan-African green — progress */
+  --color-positive: #3fb97f;       /* legible green for text on dark */
+  --color-negative: #e05d5d;       /* legible red for text on dark */
   --color-info: #5aa2e0;
-  --color-score-low: #e05d5d;      /* Friendliness Score 0 — most harmful */
+  --color-score-low: #c1272d;      /* Friendliness Score 0 — most harmful */
   --color-score-mid: #e9c44c;      /* Friendliness Score 50 */
-  --color-score-high: #3fb97f;     /* Friendliness Score 100 — most supportive */
-  --color-map-untracked: #2b3644;  /* state with no data / not enough data */
-  --color-map-stroke: #0b0f14;
+  --color-score-high: #2e9e5b;     /* Friendliness Score 100 — most supportive */
+  --color-map-untracked: #2b3644;
+  --color-map-stroke: #0a0c0e;
   --font-display: "Georgia", "Times New Roman", serif;
-  --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --space-xs: 0.25rem;
   --space-sm: 0.5rem;
@@ -84,6 +86,7 @@ body {
 }
 a { color: var(--color-accent-strong); text-decoration: none; }
 a:hover { text-decoration: underline; }
+.panstripe { height: 6px; background: linear-gradient(90deg, var(--color-red) 0 33%, var(--color-accent) 33% 66%, var(--color-green) 66% 100%); }
 .wrap { max-width: var(--max-width); margin: 0 auto; padding: 0 var(--space-lg); }
 header.site {
   border-bottom: 1px solid var(--color-border);
@@ -100,9 +103,23 @@ nav.main a { color: var(--color-text-muted); font-weight: 600; }
 nav.main a:hover { color: var(--color-text); text-decoration: none; }
 .hero { padding: var(--space-xl) 0 var(--space-lg); }
 .hero h1 {
-  font-family: var(--font-display); font-weight: 600;
-  font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.12; margin: 0 0 var(--space-md);
+  font-family: var(--font-display); font-weight: 700; letter-spacing: -0.01em;
+  font-size: clamp(2.2rem, 5.5vw, 3.6rem); line-height: 1.08; margin: 0 0 var(--space-md);
 }
+.hero-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-lg); align-items: center; }
+@media (min-width: 860px) { .hero-grid { grid-template-columns: 1.5fr 1fr; } }
+.hero-panel {
+  border: 2px solid var(--color-accent); border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 78% 22%, var(--color-accent) 0 42px, transparent 43px),
+    linear-gradient(160deg, var(--color-red) 0%, #6e1420 45%, var(--color-green) 130%);
+  min-height: 210px; padding: var(--space-lg); display: flex; flex-direction: column; justify-content: flex-end;
+  color: #fff;
+}
+.hero-panel .kente { height: 10px; border-radius: 999px; margin-bottom: var(--space-md);
+  background: repeating-linear-gradient(90deg, var(--color-accent) 0 18px, var(--color-red) 18px 36px, #111 36px 54px, var(--color-green) 54px 72px); }
+.hero-panel strong { font-family: var(--font-display); font-size: 1.45rem; line-height: 1.25; display: block; }
+.hero-panel span { font-size: 0.92rem; opacity: 0.92; }
 .hero p.lede { color: var(--color-text-muted); font-size: 1.12rem; max-width: 46rem; margin: 0; }
 .freshness {
   display: inline-flex; gap: var(--space-sm); align-items: center;
@@ -116,13 +133,15 @@ nav.main a:hover { color: var(--color-text); text-decoration: none; }
   gap: var(--space-md); margin: var(--space-lg) 0 var(--space-xl);
 }
 .stat {
-  background: var(--color-surface); border: 1px solid var(--color-border);
+  background: var(--color-surface); border: 1px solid var(--color-border); border-top: 4px solid var(--color-accent);
   border-radius: var(--radius-md); padding: var(--space-lg); box-shadow: var(--shadow-card);
 }
-.stat .num { font-size: 2.1rem; font-weight: 700; line-height: 1; }
+.stat:nth-child(1) { border-top-color: var(--color-red); }
+.stat:nth-child(3) { border-top-color: var(--color-green); }
+.stat .num { font-size: 2.1rem; font-weight: 700; line-height: 1; font-family: var(--font-display); }
 .stat .label { color: var(--color-text-muted); font-size: 0.9rem; margin-top: var(--space-sm); }
 section.block { margin: 0 0 var(--space-xl); }
-section.block h2 { font-family: var(--font-display); font-size: 1.5rem; margin: 0 0 var(--space-md); }
+section.block h2 { font-family: var(--font-display); font-size: 1.5rem; margin: 0 0 var(--space-md); border-bottom: 3px solid var(--color-accent); padding-bottom: 0.35rem; }
 .bar-row { display: grid; grid-template-columns: 150px 1fr 60px; gap: var(--space-md); align-items: center; margin-bottom: var(--space-sm); }
 .bar-track { background: var(--color-surface-raised); border-radius: 999px; height: 12px; overflow: hidden; }
 .bar-fill { background: var(--color-accent); height: 100%; border-radius: 999px; }
@@ -151,14 +170,16 @@ table.data tr:last-child td { border-bottom: none; }
   border-radius: var(--radius-md); padding: var(--space-lg); box-shadow: var(--shadow-card);
   display: flex; gap: var(--space-md);
 }
-.person img { width: 64px; height: 64px; object-fit: cover; border-radius: 50%; border: 2px solid var(--color-border); }
+.person img { width: 64px; height: 64px; object-fit: cover; border-radius: 50%; border: 2px solid var(--color-accent); }
+.status-pill { color: var(--color-text); border-color: var(--color-accent); font-weight: 600; }
+.us-map-wrap { border: 2px solid var(--color-accent); border-radius: var(--radius-lg); background: var(--color-surface); padding: var(--space-md); }
 .person .avatar-fallback {
   width: 64px; height: 64px; border-radius: 50%; flex: none;
-  background: var(--color-surface-raised); border: 2px solid var(--color-border);
+  background: linear-gradient(150deg, var(--color-red), var(--color-green)); border: 2px solid var(--color-accent);
   display: flex; align-items: center; justify-content: center;
   font-family: var(--font-display); font-size: 1.3rem; color: var(--color-accent);
 }
-.person h3 { margin: 0 0 var(--space-xs); font-size: 1.02rem; }
+.person h3 { margin: 0 0 var(--space-xs); font-size: 1.15rem; font-family: var(--font-display); }
 .person p { margin: 0; color: var(--color-text-muted); font-size: 0.88rem; }
 .notice {
   border: 1px solid var(--color-accent); border-radius: var(--radius-md);
@@ -666,6 +687,7 @@ def _page(title: str, body: str) -> str:
 <style>{TOKENS_CSS}{BASE_CSS}</style>
 </head>
 <body>
+<div class="panstripe" aria-hidden="true"></div>
 <header class="site"><div class="wrap">
   <a class="brand" href="/">{_esc(PRODUCT_NAME)}</a>
   <nav class="main">
@@ -697,7 +719,7 @@ def _friendliness_score(supportive: int, harmful: int) -> int | None:
 
 # Friendliness Score ramp on an absolute 0-100 scale: red (0) -> amber
 # (50) -> green (100). Hex values mirror the --color-score-* tokens.
-_SCORE_STOPS = ((0, (224, 93, 93)), (50, (233, 196, 76)), (100, (63, 185, 127)))
+_SCORE_STOPS = ((0, (193, 39, 45)), (50, (233, 196, 76)), (100, (46, 158, 91)))
 
 
 def _score_color(score: int) -> str:
@@ -819,10 +841,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
         body = f"""
 <div class="hero">
   {freshness}
+  <div class="hero-grid"><div>
   <h1>Legislation that affects Black Americans, tracked daily.</h1>
   <p class="lede">Every bill in every state legislature, normalised onto one
   status ladder, classified against a published taxonomy, and refreshed by a
   scheduled pipeline — no hand-updated spreadsheets.</p>
+  </div>
+  <div class="hero-panel" role="img" aria-label="Abstract illustration in Pan-African red, gold and green with a rising sun, representing community and civic power">
+    <div class="kente" aria-hidden="true"></div>
+    <strong>Know the bill.<br>Know your rep.<br>Act.</strong>
+    <span>A living archive of legislation — and a tool to act on it.</span>
+  </div></div>
 </div>
 <div class="stats">{stats_html}</div>
 <section class="block"><h2>Where bills stand</h2>{bars}</section>
@@ -860,7 +889,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 title = f'<a href="{_esc(b["url"])}">{title}</a>'
             trs += (
                 f"<tr><td><strong>{_esc(b['number'])}</strong></td><td>{title}</td>"
-                f"<td>{_esc(b['public_status'])}</td><td>{cats}</td></tr>"
+                f"<td><span class=\"pill status-pill\">{_esc(b['public_status'])}</span></td><td>{cats}</td></tr>"
             )
         if not trs:
             trs = '<tr><td colspan="4">No bills match — or no database is attached yet.</td></tr>'
@@ -988,7 +1017,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 Americans? Colour shows the Friendliness Score, computed from the stance of
 classified bills affecting Black Americans in each state.</p></div>
 {notice}
-<svg class="us-map" viewBox="{US_MAP_VIEWBOX}" role="img" aria-label="Map of the United States coloured by Friendliness Score">{paths_html}</svg>
+<div class="us-map-wrap"><svg class="us-map" viewBox="{US_MAP_VIEWBOX}" role="img" aria-label="Map of the United States coloured by Friendliness Score">{paths_html}</svg></div>
 <div class="map-legend">
   <span class="legend-scale"><span>0 · most harmful</span><span class="legend-bar"></span><span>100 · most supportive</span></span>
   <span><span class="swatch"></span>Not tracked yet</span>

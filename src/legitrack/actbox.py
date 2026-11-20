@@ -61,9 +61,9 @@ try:  # Design tokens are web.py's documented re-skin point; reuse them.
 except Exception:  # pragma: no cover - fallback if web.py is mid-refactor
     TOKENS_CSS = """
 :root {
-  --color-bg: #0b0f14; --color-surface: #131a22; --color-surface-raised: #1a232e;
-  --color-border: #26313d; --color-text: #e8eef4; --color-text-muted: #93a3b1;
-  --color-accent: #d9a441; --color-accent-strong: #f0bc55;
+  --color-bg: #0a0c0e; --color-surface: #14181d; --color-surface-raised: #1c222a;
+  --color-border: #2c3e50; --color-text: #f4f3ef; --color-text-muted: #9fa6b2;
+  --color-accent: #d9a441; --color-accent-strong: #f0bc55; --color-red: #c1272d; --color-green: #1a7a3a;
   --color-positive: #3fb97f; --color-negative: #e05d5d; --color-info: #5aa2e0;
   --font-display: "Georgia", "Times New Roman", serif;
   --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -886,7 +886,7 @@ def _bills_by_ids_pg(
 # ---------------------------------------------------------------------------
 
 ACT_CSS = """
-.act-form { display: grid; gap: var(--space-md); max-width: 640px; }
+.act-form { display: grid; gap: var(--space-md); max-width: 640px; border: 2px solid var(--color-accent); border-top: 10px solid var(--color-red, #c1272d); border-radius: var(--radius-md); padding: var(--space-lg); background: var(--color-surface); }
 .act-form label { display: flex; flex-direction: column; gap: var(--space-xs);
   font-size: 0.9rem; color: var(--color-text-muted); }
 .act-form input, .act-form select {
@@ -895,12 +895,12 @@ ACT_CSS = """
   padding: var(--space-sm) var(--space-md); font: inherit;
 }
 .act-cta {
-  display: inline-block; background: var(--color-accent); color: #14100a;
+  display: inline-block; background: var(--color-red, #c1272d); color: #fff;
   font-weight: 700; border: none; border-radius: var(--radius-sm);
   padding: var(--space-md) var(--space-lg); font: inherit; cursor: pointer;
   font-size: 1.05rem;
 }
-.act-cta:hover { text-decoration: none; background: var(--color-accent-strong); }
+.act-cta:hover { text-decoration: none; background: #a31f24; }
 .rep-row, .bill-row {
   display: flex; gap: var(--space-md); align-items: flex-start;
   background: var(--color-surface); border: 1px solid var(--color-border);
@@ -943,6 +943,7 @@ def _act_page(title: str, body: str) -> str:
 <style>{TOKENS_CSS}{BASE_CSS}{ACT_CSS}</style>
 </head>
 <body>
+<div class="panstripe" aria-hidden="true"></div>
 <header class="site"><div class="wrap">
   <a class="brand" href="/">{_esc(PRODUCT_NAME)}</a>
   <nav class="main">
